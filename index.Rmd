@@ -21,7 +21,7 @@ theme_set(theme_cowplot())
 
 
 ```{r, include = F}
-#load SIMD data files
+#load SIMD data
 
 simd_zones <- 
   read_csv(here("data", "SIMD+2020v2+-+datazone+lookup.csv")) 
