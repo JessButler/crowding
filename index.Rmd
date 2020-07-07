@@ -1,0 +1,326 @@
+---
+title: "Crowding in Grampian"
+output:
+  html_document: default
+---
+
+
+```{r, include = F}
+library(here)
+library(tidyverse)
+library(janitor)
+library(sf)
+library(mapview)
+library(gt)
+library(cowplot)
+library(plotly)
+library(ggrepel)
+
+theme_set(theme_cowplot())
+```
+
+
+```{r, include = F}
+#load SIMD data files
+
+simd_zones <- 
+  read_csv(here("data", "SIMD+2020v2+-+datazone+lookup.csv")) 
+
+simd_indicators <- 
+  read_csv(here("data", "SIMD2020v2_indicators.csv")) %>%
+   mutate(across(everything(), ~ str_remove_all(., "%")),
+          across(everything(), ~ str_remove_all(., "\\*")),
+          across(Total_population:nocentralheat_rate, ~ as.numeric(.)))
+
+postcodes <- read_csv(here("data", "SIMD+2020v2+-+postcode+lookup.csv")) 
+
+#load shapefiles for maps
+
+datazone_sf <- st_read(here("data", "sc_dz_11.shp"))
+
+#load data from 2011 census bulk files
+#clean variable names to remove caps and spaces
+
+ethnicity <- read_csv(here("data", "SNS Data Zone 2011 blk", "KS201SC.csv")) %>% 
+  clean_names()
+
+english_skills <- read_csv(here("data", "SNS Data Zone 2011 blk", "QS213SC.csv")) %>%
+  clean_names()
+
+country_birth <- read_csv(here("data", "SNS Data Zone 2011 blk", "KS204SC.csv")) %>%
+  clean_names() 
+
+```
+
+```{r, include = F}
+
+#join deprivation to census files
+
+simd <- left_join(simd_indicators, simd_zones, by = c("Data_Zone" = "DZ")) %>%
+  left_join(., english_skills, by = c("Data_Zone" = "x1")) %>%
+  left_join(., ethnicity, by = c("Data_Zone" = "x1")) %>%
+  left_join(., country_birth, by = c("Data_Zone" = "x1"))
+
+#calculate percentages from census data
+
+simd <-
+  mutate(simd, 
+         perc_not_born_uk_roi = 100- ((england + scotland + wales + northern_ireland + republic_of_ireland)/all_people.y * 100),
+         perc_not_working_age = 100- (Working_age_population/Total_population *100),
+         perc_polish = white_polish/all_people.x * 100,
+         perc_non_white = 100 - (white/all_people.x * 100)
+         )
+
+#combine all postcodes in each datazone
+postcodes_in_datazone <-
+postcodes %>%
+  group_by(DZ) %>%
+  summarise(postcodes = toString(Postcode)) 
+
+```
+
+
+```{r, include = F}
+#select local authorities' data 
+#calculate population density
+#create percentile variable and flag the 95th+
+#join to shapefile
+#(this is repeated 3x and should be a function)
+
+aberdeen <-
+  simd %>%
+  filter(Council_area == "Aberdeen City") 
+
+aberdeen_data_zones <- pull(aberdeen, Data_Zone)
+
+aberdeen_sf <- filter(datazone_sf, DataZone %in% aberdeen_data_zones)
+
+aberdeen_sf <-
+  merge(aberdeen_sf, aberdeen, by.x = "DataZone", by.y = "Data_Zone")
+
+aberdeen_sf <-
+  aberdeen_sf %>% 
+  mutate(pop_per_km2 = Total_population/StdAreaKm2,
+         pop_density_percentile = ntile(pop_per_km2, 100),
+         overcrowded_rate_percentile = ntile(overcrowded_rate, 100),
+         very_crowded = 
+           ifelse(
+             pop_density_percentile >= 95 | overcrowded_rate_percentile >= 95, 1, 0))
+   
+aberdeen <-  
+  select(aberdeen_sf, 
+         DataZone, pop_per_km2, pop_density_percentile, overcrowded_rate_percentile) %>%
+  left_join(aberdeen, ., by = c("Data_Zone" = "DataZone"))
+
+shire <-
+  simd %>%
+  filter(Council_area == "Aberdeenshire") 
+
+shire_data_zones <- pull(shire, Data_Zone)
+
+shire_sf <- filter(datazone_sf, DataZone %in% shire_data_zones)
+
+shire_sf <-
+  merge(shire_sf, shire, by.x = "DataZone", by.y = "Data_Zone")
+
+shire_sf <-
+  shire_sf %>% 
+  mutate(pop_per_km2 = Total_population/StdAreaKm2,
+         pop_density_percentile = ntile(pop_per_km2, 100),
+         overcrowded_rate_percentile = ntile(overcrowded_rate, 100),
+         very_crowded = 
+           ifelse(
+             pop_density_percentile >= 95 | overcrowded_rate_percentile >= 95, 1, 0)) 
+
+shire <-  
+  select(shire_sf, 
+         DataZone, pop_per_km2, pop_density_percentile, overcrowded_rate_percentile) %>%
+  left_join(shire, ., by = c("Data_Zone" = "DataZone"))
+
+moray <-
+  simd %>%
+  filter(Council_area == "Moray") 
+
+moray_data_zones <- pull(moray, Data_Zone)
+
+moray_sf <- filter(datazone_sf, DataZone %in% moray_data_zones)
+
+moray_sf <-
+  merge(moray_sf, moray, by.x = "DataZone", by.y = "Data_Zone")
+
+moray_sf <-
+  moray_sf %>% 
+  mutate(pop_per_km2 = Total_population/StdAreaKm2,
+         pop_density_percentile = ntile(pop_per_km2, 100),
+         overcrowded_rate_percentile = ntile(overcrowded_rate, 100),
+         very_crowded = 
+           ifelse(
+             pop_density_percentile >= 95 | overcrowded_rate_percentile >= 95, 1, 0)) 
+
+moray <-  
+  select(moray_sf, 
+         DataZone, pop_per_km2, pop_density_percentile, overcrowded_rate_percentile) %>%
+  left_join(moray, ., by = c("Data_Zone" = "DataZone"))
+```
+
+<br/><br/>
+
+### Background  
+
+Scotland is divided into 7000 Data Zones of about 500-1000 people each.  
+This is a short report about which zones in Grampian have:  
+1) many people living in crowded homes, or  
+2) many people living in a crowded neighbourhood,  
+or both.
+
+<br/><br/>
+
+### Finding neighbourhoods with dense populations and crowded homes  
+
+The two figures below show all the Data Zones for Aberdeen City mapped for their percent of people living in overcrowded homes versus the datazone’s total density (population/km2).  
+  
+Datazones are red if they are in the 95th percentile or above on either measure. The second figure is the same as the first but with the red points labeled.  
+
+```{r, echo = F, fig.width=8, fig.height=6}
+
+#overcrowding rate vs population density graph
+
+aberdeen_plot <- 
+  ggplot(data = aberdeen_sf, 
+         aes(x = pop_per_km2, y = overcrowded_rate, label = DZname)) +
+  geom_point(aes(color = factor(very_crowded)), size = 3) +
+  background_grid() +
+  theme(legend.position = "none") +
+  scale_color_manual(values=c("grey40", "red2")) +
+  ylim(0, 45) +
+  labs(
+    x = "\nPeople per km2", 
+    y = "People living in overcrowded homes (%)\n",
+    subtitle = "Population density measures for Aberdeen City neighbourhoods (zones of ca. 750 people each)\n", 
+    caption= "red = 95th+ percentile")
+
+aberdeen_plot
+```
+
+  
+```{r, echo = FALSE, error=F, fig.width=8, fig.height=6}
+
+#same plot, with labels
+aberdeen_plot + 
+  geom_label_repel(aes(label = ifelse(very_crowded == 1, as.character(DZname), "")),
+                  box.padding   = 0.35,
+                  point.padding = 0.5,
+                  segment.color = 'grey50',
+                  force = 20,
+                  max.iter = 20000) # this is a bit silly setting
+```
+
+<br/><br/>
+
+### Mapping the most crowded  
+This map shows data zones where either the overcrowding rate, the population per km2, or both is 95th percentile or above.  
+These areas are the same as those in red the the figures above.  
+Zoom/click for more information on each zone.  
+
+```{r, error = F, echo = F}
+#interactive map of the datazones flagged above as most crowded
+aberdeen_sf %>%
+  select(DataZone, Name, Total_population, SIMD2020v2_Decile, very_crowded) %>%
+  mapview(
+    map.types = "OpenStreetMap",
+    zcol = "very_crowded",
+    label = aberdeen_sf$Name,
+    legend = F)
+```
+
+<br/><br/>
+
+### Ranking the most crowded  
+Data Zones with most people living in overcrowded homes or most people per km2 (95th+ percentile)  
+
+```{r, echo = F}
+#html table that fails to knit to Word doc
+#same metrics as plots above
+#need fixed so export to RTF in the meantime
+
+aberdeen %>%
+  select(DZname, Total_population, overcrowded_rate, pop_per_km2, overcrowded_rate_percentile, pop_density_percentile) %>%
+   filter(overcrowded_rate_percentile >= 95 | pop_density_percentile >= 95) %>%
+   arrange(desc(overcrowded_rate_percentile + pop_density_percentile)) %>%
+  gt() %>%
+ fmt_number(columns = vars(pop_per_km2), decimals = 0) %>%
+  tab_header(
+    title = "", 
+    subtitle = "Top 5% of Data Zones with people living in overcrowded homes or most people per km2") %>%
+  cols_label(
+    DZname = "Data Zone",
+    Total_population = "Population", 
+    overcrowded_rate = "People living overcrowded (%)",
+    pop_per_km2 = "Population/km2",
+    overcrowded_rate_percentile = "Overcrowded percentile",
+    pop_density_percentile = "Pop/km2 percentile") %>%
+  tab_options(data_row.padding = px(1))
+  #gtsave(filename = "table.rtf")
+  #tab_options(container.height = 400)
+```
+
+<br/><br/>
+
+### Characteristics of the most crowded  
+Data Zones with most people living in overcrowded homes or most people per km2 (95th+ percentile)  
+
+```{r, echo = F}
+#html table that fails to knit to Word doc
+#showing demographic characteristics
+#need fixed so export to RTF in the meantime
+
+aberdeen %>%
+  filter(overcrowded_rate_percentile >= 95 | pop_density_percentile >= 95) %>%
+  arrange(desc(overcrowded_rate_percentile + pop_density_percentile)) %>%
+  select(DZname, Total_population, perc_not_born_uk_roi, perc_non_white, perc_polish, perc_not_working_age) %>%
+  gt() %>%
+  fmt_number(columns = vars(perc_not_working_age, perc_not_born_uk_roi, perc_non_white, perc_polish), decimals = 0) %>%
+  tab_header(
+    title = "", 
+    subtitle = "Top 5% of Data Zones with people living in overcrowded homes or most people per km2") %>%
+  cols_label(
+    DZname = "Data Zone",
+    Total_population = "Population",
+    perc_not_born_uk_roi = "% Not born UK/ROI",
+    perc_non_white = "% BAME",
+    perc_polish = "% Polish",
+    perc_not_working_age = "% Not working age",) %>%
+  tab_options(data_row.padding = px(1))
+  #gtsave(filename = "table2.rtf")
+  #tab_options(container.height = 400)
+```
+
+
+```{r, echo = F}
+#write most crowded areas' postcodes to file
+write_csv(
+filter(aberdeen, overcrowded_rate_percentile >= 95 | pop_density_percentile >= 95) %>%
+  select(Data_Zone, DZname) %>%
+  left_join(., postcodes_in_datazone, by = c("Data_Zone" = "DZ")),
+"postcode table.csv")
+```
+
+<br/><br/>
+
+### Sources  
+
+Data Zone area (km2) and location and were taken from here: 
+https://data.gov.uk/dataset/ab9f1f20-3b7f-4efa-9bd2-239acf63b540/data-zone-boundaries-2011
+
+Total population, working age population, overcrowded rate and postcode mapping were taken from the Scottish Index of Multiple Deprivation 2020 version 2 
+https://www.gov.scot/collections/scottish-index-of-multiple-deprivation-2020/
+
+Country of birth and ethnicity were taken from the 2011 Census 
+https://www.scotlandscensus.gov.uk/ods-web/data-warehouse.html
+
+
+Code and data at https://github.com/JessButler/crowding
+
+Contact jessicabutler@abdn.ac.uk
+
+
